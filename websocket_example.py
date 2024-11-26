@@ -27,20 +27,22 @@ data = []
 @app.websocket("/notify")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    i = 0
+    old_cursor = cursor = len(data)
     while True:
-        num = random.randint(0, 4)
-        if num == 2:
-            await websocket.send_json({"message": "new data", "index": i})
-            await asyncio.sleep(1)
-        i += 1
+        print("cursor", cursor)
+        print("data", data)
+        cursor = len(data)
+        if cursor > old_cursor:
+            await websocket.send_json({"message": "new data", "cursor": cursor})
+            old_cursor = cursor
+        await asyncio.sleep(1)
 
 
 class Record(BaseModel):
     data: int
 
 
-@app.put("/insert")
+@app.put("/append")
 async def insert(record: Annotated[Record, Body(embed=True)]):
     data.append(record.data)
     return {"uid": len(data)}
@@ -84,7 +86,7 @@ def api():
 def test_insert(api_fixture):
     for i in range(5):
         response = api_fixture.put(
-            "/insert",
+            "/append",
             json={"record": {"data": i}},
         )
         # assert response.status_code == 200
@@ -96,7 +98,7 @@ def inserter():
     i = 0
     while True:
         requests.put(
-            "http://127.0.0.1:8000/insert", data=json.dumps({"record": {"data": i}})
+            "http://127.0.0.1:8000/append", data=json.dumps({"record": {"data": i}})
         )
         time.sleep(0.5)
         i += 1
@@ -153,13 +155,27 @@ def test_threaded(api_fixture):
         for i in range(10):
             data.append(i)
             time.sleep(1)
+        data.append(None)
 
     t = threading.Thread(target=inserter_thread)
     t.start()
-    with api_fixture.websocket_connect("/stream?cursor=2") as websocket:
+
+    cursor = 2
+    
+    print("Beginning")
+    # Wait for a notification.
+    with api_fixture.websocket_connect("/notify") as notify_websocket:
+        notification = notify_websocket.receive_json()
+        print("notification", notification)
+
+    print("Start stream")
+    # Read the new data.
+    with api_fixture.websocket_connect(f"/stream?cursor={cursor}") as websocket:
         while True:
-            data = websocket.receive_json()
-            print("websocket", data)
+            response = websocket.receive_json()
+            if response['record'] is None:
+                break
+            print("websocket", response)
 
 
 if __name__ == "__main__":
