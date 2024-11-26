@@ -69,10 +69,10 @@ async def insert(record: Annotated[Record, Body(embed=True)]):
 
 
 @app.websocket("/stream")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, cursor: int = 0):
     await websocket.accept()
-    cursor = 0
     while True:
+        print(cursor)
         if cursor < len(data):
             await websocket.send_json({'record': data[cursor]})
             cursor += 1
@@ -123,22 +123,27 @@ def test_insert(api_fixture):
     for i in range(5):
         response = api_fixture.put(
             "/insert",
-            json={'record': {'data': 1}},
+            json={'record': {'data': i}},
         )
         #assert response.status_code == 200
         print(response.json())
         print(data)
 
 def test_syncronous(api_fixture):
-    with api_fixture.websocket_connect("/stream") as websocket:
-        for i in range(5):
-            response = api_fixture.put(
-                "/insert",
-                json={'record': {'data': i}},
-            )
-            print(response.json())
+    test_insert(api_fixture)
+    with api_fixture.websocket_connect("/stream?cursor=2") as websocket:
+        for i in range(3):
             data = websocket.receive_json()
-            print(data)
+            print("websocket", data)
+    # with api_fixture.websocket_connect("/stream", json={'cursor': 0}) as websocket:
+    #     for i in range(5):
+    #         response = api_fixture.put(
+    #             "/insert",
+    #             json={'record': {'data': i}},
+    #         )
+    #         print(response.json())
+    #         data = websocket.receive_json()
+    #         print(data)
 
 
 if __name__ == "__main__":
