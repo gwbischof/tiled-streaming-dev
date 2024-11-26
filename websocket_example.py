@@ -59,7 +59,7 @@ class Record(BaseModel):
 
 @app.put("/insert")
 async def insert(record: Annotated[Record, Body(embed=True)]):
-    data.append(record)
+    data.append(record.data)
     return {'uid': len(data)}
 
 # @app.put("/insert/{record}")
@@ -71,9 +71,13 @@ async def insert(record: Annotated[Record, Body(embed=True)]):
 @app.websocket("/stream")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    i = 0
+    cursor = 0
     while True:
-        pass
+        if cursor < len(data):
+            await websocket.send_json({'record': data[cursor]})
+            cursor += 1
+        else:
+            await asyncio.sleep(1)
 
 
 @app.get("/")
@@ -124,6 +128,17 @@ def test_insert(api_fixture):
         #assert response.status_code == 200
         print(response.json())
         print(data)
+
+def test_syncronous(api_fixture):
+    with api_fixture.websocket_connect("/stream") as websocket:
+        for i in range(5):
+            response = api_fixture.put(
+                "/insert",
+                json={'record': {'data': i}},
+            )
+            print(response.json())
+            data = websocket.receive_json()
+            print(data)
 
 
 if __name__ == "__main__":
