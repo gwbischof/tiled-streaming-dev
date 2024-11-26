@@ -1,15 +1,22 @@
 import contextlib
+import subprocess
+import sys
 from typing import Annotated
+from urllib import request
 import uvicorn
 import asyncio
 import json
 import pytest
 import random
+import time
+import requests
+import threading
 
 from fastapi import FastAPI, Body
 from fastapi import WebSocket
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from websockets.sync.client import connect
 
 app = FastAPI()
 
@@ -72,7 +79,6 @@ async def insert(record: Annotated[Record, Body(embed=True)]):
 async def websocket_endpoint(websocket: WebSocket, cursor: int = 0):
     await websocket.accept()
     while True:
-        print(cursor)
         if cursor < len(data):
             await websocket.send_json({'record': data[cursor]})
             cursor += 1
@@ -129,6 +135,57 @@ def test_insert(api_fixture):
         print(response.json())
         print(data)
 
+def inserter():
+    i = 0
+    while True:
+        requests.put("http://127.0.0.1:8000/insert", data=json.dumps({'record': {'data': i}}))
+        time.sleep(0.5)
+        i+=1
+    
+@contextlib.contextmanager
+def inserter_process():
+    try:
+        ps = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                f"from websocket_example import inserter; inserter()",
+            ]
+        )
+        time.sleep(0.5)
+        yield ps
+    finally:
+        ps.terminate()
+
+    
+@contextlib.contextmanager
+def api_process():
+    try:
+        ps = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                f"from websocket_example import app; import uvicorn; uvicorn.run(app)",
+            ]
+        )
+        time.sleep(0.5)
+        yield ps
+    finally:
+        ps.terminate()
+
+def test_asyncronous():
+    with api_process():
+        with inserter_process():
+            with connect("ws://localhost:8000/stream") as websocket:
+                websocket.send("Hello world!")
+                message = websocket.recv()
+                print(message)
+            with api_fixture.websocket_connect("/stream") as websocket:
+                with inserter_process():
+                    while True:
+                        data = websocket.receive_json()
+                        print("websocket", data)
+
 def test_syncronous(api_fixture):
     test_insert(api_fixture)
     with api_fixture.websocket_connect("/stream?cursor=2") as websocket:
@@ -145,6 +202,18 @@ def test_syncronous(api_fixture):
     #         data = websocket.receive_json()
     #         print(data)
 
+def inserter_thread():
+	for i in range(10):
+		data.append(i)
+		time.sleep(1)
+
+def test_async(api_fixture):
+    t = threading.Thread(target=inserter_thread)
+    t.start()
+    with api_fixture.websocket_connect("/stream?cursor=2") as websocket:
+        while True:
+            data = websocket.receive_json()
+            print("websocket", data)
 
 if __name__ == "__main__":
     uvicorn.run(app)
