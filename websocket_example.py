@@ -13,6 +13,7 @@ import requests
 import threading
 import docker
 import psycopg2
+import uuid
 
 from fastapi import FastAPI, Body
 from fastapi import WebSocket
@@ -74,25 +75,25 @@ def api_fixture():
 
 @pytest.fixture(scope="session")
 def postgres_container():
-    # yield 1
-    client = docker.from_env()
-    container = client.containers.run(
-        "postgres", detach=True, 
-        ports={'5432/tcp': 5432},
-        environment={
-            'POSTGRES_USER': 'postgres',
-            'POSTGRES_PASSWORD': 'secret',
-            'POSTGRES_DB': 'streaming-test'
-        },
-        name="streaming-test-postgres",
-        auto_remove=True,
-        remove=True,
-    )
-    while container.status != "running":
-        time.sleep(1)
-        container.reload()
-    yield container
-    container.stop()
+    yield 1
+    # client = docker.from_env()
+    # container = client.containers.run(
+    #     "postgres", detach=True, 
+    #     ports={'5432/tcp': 5432},
+    #     environment={
+    #         'POSTGRES_USER': 'postgres',
+    #         'POSTGRES_PASSWORD': 'secret',
+    #         'POSTGRES_DB': 'streaming-test'
+    #     },
+    #     name="streaming-test-postgres",
+    #     auto_remove=True,
+    #     remove=True,
+    # )
+    # while container.status != "running":
+    #     time.sleep(1)
+    #     container.reload()
+    # yield container
+    # container.stop()
 
 
 @contextlib.contextmanager
@@ -208,18 +209,25 @@ def test_postgres_connectivity(postgres_container):
     cur = conn.cursor()
     # cur.execute('SELECT 1')
     # assert cur.fetchone()[0] == 1
+
     cur.execute('''
         CREATE TABLE datasets (
             uid uuid,
-            timestamp timestamp,
             data integer[],
-            length integer,
+            length integer
         );
     ''')
-
-
+    cur.execute(f'''
+        INSERT INTO datasets (uid, data, length)
+            VALUES ('{uuid.uuid4()}', '{{1, 2, 3}}', 3);
+    ''')
+    cur.execute('SELECT * FROM datasets LIMIT 1')
+    print(cur.fetchone())
 
 #{'timestamp': "time", 'uid': 123123, length: 2 'data': [1, 2]}
+# TODO:
+# - update the inserter to append to the data list in datasets table
+# - update notify and stream endpoints to poll from postgress and stream
 
 if __name__ == "__main__":
     uvicorn.run(app)
