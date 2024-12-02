@@ -71,6 +71,7 @@ def api_fixture():
     with TestClient(app) as client:
         yield client
 
+
 @contextlib.contextmanager
 def api():
     with TestClient(app) as client:
@@ -174,32 +175,49 @@ def test_threaded(api_fixture):
     with api_fixture.websocket_connect(f"/stream?cursor={cursor}") as websocket:
         while True:
             response = websocket.receive_json()
-            if response['record'] is None:
+            if response["record"] is None:
                 break
             print("websocket", response)
 
 
 def test_postgres_connectivity():
-    conn = psycopg2.connect(dbname='streaming-test-postgres', user='postgres', host='localhost', password='secret')
+    conn = psycopg2.connect(
+        dbname="streaming-test-postgres",
+        user="postgres",
+        host="localhost",
+        password="secret",
+    )
     cur = conn.cursor()
     # cur.execute('SELECT 1')
     # assert cur.fetchone()[0] == 1
 
-    cur.execute('''
+    cur.execute(
+        """
         CREATE TABLE datasets (
-            uid uuid,
+            uid integer,
             data integer[],
             length integer
         );
-    ''')
-    cur.execute(f'''
+    """
+    )
+    cur.execute(
+        f"""
         INSERT INTO datasets (uid, data, length)
-            VALUES ('{uuid.uuid4()}', '{{1, 2, 3}}', 3);
-    ''')
+            VALUES (1, '{{1, 2, 3}}', 3);
+    """
+    )
+
+    cur.execute(
+        f"""
+        UPDATE datasets SET data = array_append(data, 99) WHERE uid=1;
+    """
+    )
     cur.execute('SELECT * FROM datasets LIMIT 1')
+
     print(cur.fetchone())
 
-#{'timestamp': "time", 'uid': 123123, length: 2 'data': [1, 2]}
+
+# {'timestamp': "time", 'uid': 123123, length: 2 'data': [1, 2]}
 # TODO:
 # - update the inserter to append to the data list in datasets table
 # - update notify and stream endpoints to poll from postgress and stream
