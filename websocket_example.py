@@ -210,14 +210,6 @@ def test_threaded(api_fixture):
 
 
 def test_postgres_connectivity():
-    conn = psycopg2.connect(
-        dbname="streaming-test-postgres",
-        user="postgres",
-        host="localhost",
-        password="secret",
-    )
-    cur = conn.cursor()
-
     cur.execute(
         """
         CREATE TABLE datasets (
