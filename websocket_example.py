@@ -11,7 +11,6 @@ import random
 import time
 import requests
 import threading
-import docker
 import psycopg2
 import uuid
 
@@ -71,30 +70,6 @@ async def root():
 def api_fixture():
     with TestClient(app) as client:
         yield client
-
-
-@pytest.fixture(scope="session")
-def postgres_container():
-    yield 1
-    # client = docker.from_env()
-    # container = client.containers.run(
-    #     "postgres", detach=True, 
-    #     ports={'5432/tcp': 5432},
-    #     environment={
-    #         'POSTGRES_USER': 'postgres',
-    #         'POSTGRES_PASSWORD': 'secret',
-    #         'POSTGRES_DB': 'streaming-test'
-    #     },
-    #     name="streaming-test-postgres",
-    #     auto_remove=True,
-    #     remove=True,
-    # )
-    # while container.status != "running":
-    #     time.sleep(1)
-    #     container.reload()
-    # yield container
-    # container.stop()
-
 
 @contextlib.contextmanager
 def api():
@@ -187,7 +162,7 @@ def test_threaded(api_fixture):
     t.start()
 
     cursor = 2
-    
+
     print("Beginning")
     # Wait for a notification.
     with api_fixture.websocket_connect("/notify") as notify_websocket:
@@ -204,8 +179,8 @@ def test_threaded(api_fixture):
             print("websocket", response)
 
 
-def test_postgres_connectivity(postgres_container):
-    conn = psycopg2.connect(dbname='streaming-test', user='postgres', host='localhost', password='secret')
+def test_postgres_connectivity():
+    conn = psycopg2.connect(dbname='streaming-test-postgres', user='postgres', host='localhost', password='secret')
     cur = conn.cursor()
     # cur.execute('SELECT 1')
     # assert cur.fetchone()[0] == 1

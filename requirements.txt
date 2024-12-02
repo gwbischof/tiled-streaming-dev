@@ -4,5 +4,4 @@ fastapi
 requests
 httpx
 websockets
-docker
-psycopg2-binary
+psycopg2
