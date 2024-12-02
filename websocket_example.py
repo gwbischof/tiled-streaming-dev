@@ -22,18 +22,45 @@ from websockets.sync.client import connect
 
 app = FastAPI()
 
-# Array to hold data.
-data = []
+conn = psycopg2.connect(
+    dbname="streaming-test-postgres",
+    user="postgres",
+    host="localhost",
+    password="secret",
+)
+cur = conn.cursor()
+
+def db_init():
+    cur.execute(
+        """
+        CREATE TABLE datasets (
+            uid integer,
+            data integer[],
+            length integer
+        );
+    """
+    )
+    cur.execute(
+        f"""
+        INSERT INTO datasets (uid, data, length)
+            VALUES (1, '{{1, 2, 3}}', 3);
+    """
+    )
+    return cur
 
 
 @app.websocket("/notify")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    old_cursor = cursor = len(data)
+    cur.execute('SELECT * FROM datasets LIMIT 1;')
+    uid, data, length = cur.fetchone()
+    old_cursor = cursor = length
     while True:
         print("cursor", cursor)
         print("data", data)
-        cursor = len(data)
+        cur.execute('SELECT * FROM datasets LIMIT 1;')
+        uid, data, length = cur.fetchone()
+        cursor = length
         if cursor > old_cursor:
             await websocket.send_json({"message": "new data", "cursor": cursor})
             old_cursor = cursor
@@ -69,13 +96,14 @@ async def root():
 @pytest.fixture(scope="session")
 def api_fixture():
     with TestClient(app) as client:
+        db_init()
         yield client
 
 
-@contextlib.contextmanager
-def api():
-    with TestClient(app) as client:
-        yield client
+# @contextlib.contextmanager
+# def api():
+#     with TestClient(app) as client:
+#         yield client
 
 
 # def test_notify(api_fixture):
@@ -155,9 +183,10 @@ def test_multiprocess():
 def test_threaded(api_fixture):
     def inserter_thread():
         for i in range(10):
-            data.append(i)
-            time.sleep(1)
-        data.append(None)
+            cur.execute(
+                f"""UPDATE datasets SET data = array_append(data, {i}) WHERE uid=1;
+                UPDATE datasets SET length = length + 1 WHERE uid=1;"""
+            )
 
     t = threading.Thread(target=inserter_thread)
     t.start()
@@ -188,8 +217,6 @@ def test_postgres_connectivity():
         password="secret",
     )
     cur = conn.cursor()
-    # cur.execute('SELECT 1')
-    # assert cur.fetchone()[0] == 1
 
     cur.execute(
         """
@@ -210,10 +237,11 @@ def test_postgres_connectivity():
     cur.execute(
         f"""
         UPDATE datasets SET data = array_append(data, 99) WHERE uid=1;
+        UPDATE datasets SET length = length + 1 WHERE uid=1;
     """
     )
-    cur.execute('SELECT * FROM datasets LIMIT 1')
 
+    cur.execute('SELECT * FROM datasets LIMIT 1')
     print(cur.fetchone())
 
 
