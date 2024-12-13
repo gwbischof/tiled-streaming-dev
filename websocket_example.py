@@ -65,6 +65,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await asyncio.sleep(0.5)
         conn.poll()
         for notify in conn.notifies:
+            await websocket.send_json({"notification": notify.payload})
             print(notify.payload)
         conn.notifies.clear()
 
@@ -136,6 +137,13 @@ def test_threaded(api_fixture):
     with api_fixture.websocket_connect("/notify") as notify_websocket:
         notification = notify_websocket.receive_json()
         print("notification", notification)
+
+    print("Start stream")
+    # Read the new data.
+    with api_fixture.websocket_connect(f"/stream?cursor=2") as websocket:
+        for i in range(5):
+            response = websocket.receive_json()
+            print("websocket", response)
 
     t.join()
 
