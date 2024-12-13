@@ -49,22 +49,6 @@ def db_init():
     """
     )
 
-    # TODO: Figure out how to notify for specific things. Like updating the data array.
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION notify_new_data() RETURNS trigger AS $$
-        BEGIN
-            PERFORM pg_notify('notify_test', NEW.data::text);
-            RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-
-        CREATE TRIGGER data_notify_trigger
-        AFTER UPDATE ON datasets
-        FOR EACH ROW EXECUTE PROCEDURE notify_new_data();
-        """
-    )
-
     return cur
 
 
@@ -72,9 +56,12 @@ def db_init():
 async def websocket_endpoint(websocket: WebSocket):
     cur = conn.cursor()
     await websocket.accept()
-    cur.execute("LISTEN notify_test;")
+
+    # Listen for notifications on channel `notrigger_test`.
+    cur.execute("LISTEN notrigger_test;")
 
     while True:
+        # TODO: Need to figure out how to make poll not block indefinitely.
         await asyncio.sleep(0.5)
         conn.poll()
         for notify in conn.notifies:
@@ -87,7 +74,7 @@ class Record(BaseModel):
 
 
 @app.put("/append")
-async def insert(record: Annotated[Record, Body(embed=True)]):
+async def append(record: Annotated[Record, Body(embed=True)]):
     cur = conn.cursor()
     cur.execute(
         f"""
@@ -96,8 +83,13 @@ async def insert(record: Annotated[Record, Body(embed=True)]):
         """
     )
 
+    # Create a notification on channel `notrigger_test` so that can be picked
+    # up by listeners of this channel.
+    cur.execute(f"NOTIFY notrigger_test, 'added data: {record.data}';")
+
     cur.execute("SELECT length FROM datasets WHERE uid=1 LIMIT 1;")
     length = cur.fetchone()
+
     print(f"appended {record = }")
     return {"length": length}
 
@@ -105,7 +97,6 @@ async def insert(record: Annotated[Record, Body(embed=True)]):
 @app.websocket("/stream")
 async def websocket_endpoint(websocket: WebSocket, cursor: int = 0):
     # How do you know when a dataset is completed?
-    # For this test we just send a None when the dataset is completed.
     cur = conn.cursor()
     await websocket.accept()
     while True:
