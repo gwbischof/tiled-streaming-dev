@@ -128,7 +128,7 @@ async def root():
 #asyncio.run(db_init())
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_threaded():
 
     def inserter():
