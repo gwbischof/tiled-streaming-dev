@@ -7,6 +7,7 @@ import time
 import threading
 import psycopg2
 import asyncpg
+import httpx
 
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
@@ -15,13 +16,19 @@ from fastapi import WebSocket
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from httpx import ASGITransport, AsyncClient
+from httpx_ws import aconnect_ws
 
 app = FastAPI()
 app.pool = None
 
+
 async def db_init():
-    app.pool = await asyncpg.create_pool(user='postgres', password='secret',
-                                  database='streaming-test-postgres', host='localhost')
+    app.pool = await asyncpg.create_pool(
+        user="postgres",
+        password="secret",
+        database="streaming-test-postgres",
+        host="localhost",
+    )
 
     # Take a connection from the pool.
     async with app.pool.acquire() as connection:
@@ -65,8 +72,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"notification": payload})
                 print(payload)
 
-            await connection.add_listener('notrigger_test', callback)
-            await connection.execute('LISTEN notrigger_test')
+            await connection.add_listener("notrigger_test", callback)
+            await connection.execute("LISTEN notrigger_test")
 
             while True:
                 await connection.wait()  # wait for notification
@@ -83,7 +90,7 @@ async def append(record: Annotated[Record, Body(embed=True)]):
     async with app.pool.acquire() as connection:
         # Open a transaction.
         async with connection.transaction():
-    
+
             await connection.execute(
                 f"""
                     UPDATE datasets SET data = array_append(data, {record.data}) WHERE uid=1;
@@ -93,9 +100,13 @@ async def append(record: Annotated[Record, Body(embed=True)]):
 
             # Create a notification on channel `notrigger_test` so that can be picked
             # up by listeners of this channel.
-            await connection.execute(f"NOTIFY notrigger_test, 'added data: {record.data}';")
+            await connection.execute(
+                f"NOTIFY notrigger_test, 'added data: {record.data}';"
+            )
 
-            val = await connection.fetchval("SELECT length FROM datasets WHERE uid=1 LIMIT 1;")
+            val = await connection.fetchval(
+                "SELECT length FROM datasets WHERE uid=1 LIMIT 1;"
+            )
             print(f"appended {record = }")
             return {"length": val}
 
@@ -119,33 +130,35 @@ async def root():
     return {"message": "Testing"}
 
 
-# @pytest.fixture(scope="session")
-# async def api_fixture():
-#     async with TestClient(app) as client:
-#         await db_init()
-#         yield client
-#client = TestClient(app)
-#asyncio.run(db_init())
-
-
 @pytest.mark.asyncio
-async def test_threaded():
-
-    def inserter():
-        for i in range(8):
-            print("calling api_fixture.put")
-            #client.put("/append", data=json.dumps({"record": {"data": i}}))
-            time.sleep(0.5)
-
-    t = threading.Thread(target=inserter)
-    t.start()
+async def test_async():
 
     await db_init()
+
+    async def inserter():
+        nonlocal ac
+        for i in range(8):
+            await ac.put(
+                "http://localhost/append", content=json.dumps({"record": {"data": i}})
+            )
+            await asyncio.sleep(1)
+
+    async def notifier():
+        nonlocal ac
+        # TODO: need to figure out how to make this ws client.
+        async with aconnect_ws("ws://localhost/notify", ac) as ws:
+            breakpoint()
+            message = await ws.receive_json()
+            print("websocket", message)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://localhost"
     ) as ac:
-        response = await ac.get("/")
+        async with asyncio.TaskGroup() as tg:
+            insert_task = tg.create_task(inserter())
+            notify_task = tg.create_task(notifier())
+
+    return
 
     # Wait for a notification.
     # with client.websocket_connect("/notify") as notify_websocket:
@@ -159,11 +172,7 @@ async def test_threaded():
     #         response = websocket.receive_json()
     #         print("websocket", response)
 
-    t.join()
-
 
 if __name__ == "__main__":
-
-    #asyncio.run(db_init())
-
+    asyncio.run(db_init())
     uvicorn.run(app)
