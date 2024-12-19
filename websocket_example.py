@@ -60,7 +60,7 @@ async def db_init():
 
 
 @app.websocket("/notify")
-async def websocket_endpoint(websocket: WebSocket):
+async def notify(websocket: WebSocket):
     await websocket.accept()
 
     # Take a connection from the pool.
@@ -70,15 +70,19 @@ async def websocket_endpoint(websocket: WebSocket):
             # Listen for notifications on channel `notrigger_test`.
             await connection.execute("LISTEN notrigger_test;")
 
-            async def callback(conn, pid, channel, payload):
-                await websocket.send_json({"notification": payload})
-                print(payload)
+            # TODO: figure out why callback is not getting triggered
+            # async def callback(conn, pid, channel, payload):
+            #     print("/notify4")
+            await asyncio.sleep(2.0)
+            await websocket.send_json({"notification": 12341234})
+
+            # print(payload)
 
             await connection.add_listener("notrigger_test", callback)
             await connection.execute("LISTEN notrigger_test")
 
-            while True:
-                await connection.wait()  # wait for notification
+            # while True:
+            await connection.wait()  # wait for notification
 
 
 class Record(BaseModel):
@@ -138,6 +142,7 @@ async def test_async():
     await db_init()
 
     async def inserter():
+        print("INSERTER")
         nonlocal ac
         for i in range(8):
             await ac.put(
@@ -146,21 +151,29 @@ async def test_async():
             await asyncio.sleep(1)
 
     async def notifier():
+        print("NOTIFIER")
         nonlocal ac
         # TODO: need to figure out how to make this ws client.
         async with aconnect_ws("http://localhost/notify", ac) as ws:
-            breakpoint()
+            # breakpoint()
             message = await ws.receive_json()
+            print("NOTIFIER -> aconnect_ws")
             print("websocket", message)
+            # for i in range(8):
+            #     print("NOTIFIER -> aconnect_ws")
+            #     await asyncio.sleep(1)
 
-    async with AsyncClient(
+    ac = AsyncClient(
         transport=ASGIWebSocketTransport(app=app), base_url="http://localhost"
-    ) as ac:
-        async with asyncio.TaskGroup() as tg:
-            insert_task = tg.create_task(inserter())
-            notify_task = tg.create_task(notifier())
+    )
+    # async with asyncio.TaskGroup() as tg:
+    #     insert_task = tg.create_task(inserter())
+    #     notify_task = tg.create_task(notifier())
 
-    return
+    inserter_task = asyncio.create_task(inserter())
+    notifier_task = asyncio.create_task(notifier())
+
+    _ = await asyncio.wait([inserter_task, notifier_task])
 
     # Wait for a notification.
     # with client.websocket_connect("/notify") as notify_websocket:
