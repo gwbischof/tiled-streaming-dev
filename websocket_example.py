@@ -17,6 +17,8 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from httpx import ASGITransport, AsyncClient
 from httpx_ws import aconnect_ws
+from httpx_ws.transport import ASGIWebSocketTransport
+
 
 app = FastAPI()
 app.pool = None
@@ -146,13 +148,13 @@ async def test_async():
     async def notifier():
         nonlocal ac
         # TODO: need to figure out how to make this ws client.
-        async with aconnect_ws("ws://localhost/notify", ac) as ws:
+        async with aconnect_ws("http://localhost/notify", ac) as ws:
             breakpoint()
             message = await ws.receive_json()
             print("websocket", message)
 
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://localhost"
+        transport=ASGIWebSocketTransport(app=app), base_url="http://localhost"
     ) as ac:
         async with asyncio.TaskGroup() as tg:
             insert_task = tg.create_task(inserter())
