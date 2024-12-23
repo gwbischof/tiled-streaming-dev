@@ -8,6 +8,7 @@ import threading
 import psycopg2
 import asyncpg
 import httpx
+import functools
 
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
@@ -55,6 +56,7 @@ async def db_init():
                     VALUES (1, '{{1, 2, 3}}', 3);
             """
             )
+            # # await connection.commit()
 
     print("done")
 
@@ -63,26 +65,41 @@ async def db_init():
 async def notify(websocket: WebSocket):
     await websocket.accept()
 
+    # TODO: Add back the context managers and see if it works.
+    # TODO: Make this code better.
     # Take a connection from the pool.
-    async with app.pool.acquire() as connection:
-        # Open a transaction.
-        async with connection.transaction():
-            # Listen for notifications on channel `notrigger_test`.
-            await connection.execute("LISTEN notrigger_test;")
+    # async with app.pool.acquire() as connection:
+    # Open a transaction.
+    # async with connection.transaction():
+    # Listen for notifications on channel `notrigger_test`.
+    # await connection.execute("LISTEN notrigger_test;")
+    # # await connection.commit()
 
-            # TODO: figure out why callback is not getting triggered
-            # async def callback(conn, pid, channel, payload):
-            #     print("/notify4")
-            await asyncio.sleep(2.0)
-            await websocket.send_json({"notification": 12341234})
+    connection = await asyncpg.connect(
+        "postgresql://postgres:secret@localhost/streaming-test-postgres"
+    )
 
-            # print(payload)
+    async def callback(conn, pid, channel, payload):
+        print("/notify4")
+        await websocket.send_json({"notification": 12341234})
 
-            await connection.add_listener("notrigger_test", callback)
-            await connection.execute("LISTEN notrigger_test")
+    # await asyncio.sleep(2.0)
+    # await websocket.send_json({"notification": 12341234})
 
-            # while True:
-            await connection.wait()  # wait for notification
+    # print(payload)
+
+    # await connection.add_listener("notrigger_test", callback)
+    await connection.add_listener("notrigger_test", callback)
+
+    # await connection.execute("LISTEN notrigger_test")
+    # await connection.commit()
+
+    print("/notify wait for notification")
+    while True:
+        # await connection.execute(f"NOTIFY notrigger_test, 'added data: 99';")
+        # await connection.wait()  # wait for notification
+        await asyncio.sleep(1)
+    print("/notify end of function")
 
 
 class Record(BaseModel):
@@ -104,31 +121,38 @@ async def append(record: Annotated[Record, Body(embed=True)]):
                 """
             )
 
+            # await connection.commit()
+
             # Create a notification on channel `notrigger_test` so that can be picked
             # up by listeners of this channel.
             await connection.execute(
                 f"NOTIFY notrigger_test, 'added data: {record.data}';"
             )
 
+            # # await connection.commit()
+
+            # async with connection.transaction():
+
             val = await connection.fetchval(
                 "SELECT length FROM datasets WHERE uid=1 LIMIT 1;"
             )
             print(f"appended {record = }")
-            return {"length": val}
+
+    return {"length": val}
 
 
-@app.websocket("/stream")
-async def websocket_endpoint(websocket: WebSocket, cursor: int = 0):
-    # How do you know when a dataset is completed?
-    await websocket.accept()
-    while True:
-        await app.conn.execute("SELECT * FROM datasets WHERE uid=1 LIMIT 1;")
-        _, data, length = cur.fetchone()
-        if cursor < length:
-            await websocket.send_json({"record": data[cursor]})
-            cursor += 1
-        else:
-            await asyncio.sleep(1)
+# @app.websocket("/stream")
+# async def websocket_endpoint(websocket: WebSocket, cursor: int = 0):
+#     # How do you know when a dataset is completed?
+#     await websocket.accept()
+#     while True:
+#         await app.conn.execute("SELECT * FROM datasets WHERE uid=1 LIMIT 1;")
+#         _, data, length = cur.fetchone()
+#         if cursor < length:
+#             await websocket.send_json({"record": data[cursor]})
+#             cursor += 1
+#         else:
+#             await asyncio.sleep(1)
 
 
 @app.get("/")
@@ -144,6 +168,7 @@ async def test_async():
     async def inserter():
         print("INSERTER")
         nonlocal ac
+        await asyncio.sleep(2.0)
         for i in range(8):
             await ac.put(
                 "http://localhost/append", content=json.dumps({"record": {"data": i}})
@@ -173,7 +198,7 @@ async def test_async():
     inserter_task = asyncio.create_task(inserter())
     notifier_task = asyncio.create_task(notifier())
 
-    _ = await asyncio.wait([inserter_task, notifier_task])
+    _ = await asyncio.wait([notifier_task, inserter_task])
 
     # Wait for a notification.
     # with client.websocket_connect("/notify") as notify_websocket:
