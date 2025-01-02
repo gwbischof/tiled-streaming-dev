@@ -3,6 +3,7 @@ uvicorn
 fastapi
 requests
 httpx
+httpx-ws
 websockets
 asyncpg
 pytest-asyncio
