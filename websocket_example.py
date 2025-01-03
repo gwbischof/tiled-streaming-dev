@@ -122,11 +122,13 @@ async def append(uid: str, record: Annotated[Record, Body(embed=True)]):
                 """
             )
 
-            # Create a notification on channel `notrigger_test` so that can be picked
+            # Create a notification on channel `notifications_{uid}` so that it can be picked
             # up by listeners of this channel.
             await connection.execute(
                 f"NOTIFY notifications_{uid}, 'added data: {record.data}';"
             )
+            # Create a notification on channel `notifications_all` so that generic listeners
+            # can be notified of update.
             await connection.execute(
                 f"NOTIFY notifications_all, 'added data: {record.data}';"
             )
