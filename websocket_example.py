@@ -69,7 +69,7 @@ def path_hash(path: str) -> str:
     # ensure hash is a valid postgres identifier by prefixing with a string
     # valid identifiers start with a letter or "_" and contain only letters, numbers, and "_"
     # and are at most 63 characters long
-    return "md5" + hashlib.md5(path.encode()).hexdigest()
+    return "shake256" + hashlib.shake_256(path.encode()).hexdigest(20)
 
 
 @app.websocket("/notify/{path:path}")
