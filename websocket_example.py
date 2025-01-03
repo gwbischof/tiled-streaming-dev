@@ -117,7 +117,7 @@ async def append(path: str, record: Annotated[Record, Body(embed=True)]):
     async with app.pool.acquire() as connection:
         async with connection.transaction():
             # Append new value to data and increment the length.
-            uid = path.split('/')[-1]
+            uid = path.split("/")[-1]
             await connection.execute(
                 f"""
                     UPDATE datasets SET data = array_append(data, {record.data}) WHERE uid={uid};
@@ -125,16 +125,13 @@ async def append(path: str, record: Annotated[Record, Body(embed=True)]):
                 """
             )
 
-            # Create a notification on channel `notifications_{path}` so that it can be picked
-            # up by listeners of this channel.
-            await connection.execute(
-                f"NOTIFY notifications_{path.replace('/', "_")}, 'added data: {record.data}';"
-            )
-            # Create a notification on channel `notifications_all` so that generic listeners
-            # can be notified of update.
-            await connection.execute(
-                f"NOTIFY notifications_all, 'added data: {record.data}';"
-            )
+            # Create a notification on the dataset and parent channels.
+            temp_path = ""
+            for sub_path in path.split("/"):
+                temp_path += "_" + sub_path
+                await connection.execute(
+                    f"NOTIFY notifications{temp_path}, 'added data: {record.data}';"
+                )
 
 
 @app.websocket("/stream/{path:path}")
@@ -219,11 +216,12 @@ async def test_async():
         transport=ASGIWebSocketTransport(app=app), base_url="http://localhost"
     )
     async with asyncio.TaskGroup() as tg:
-        tg.create_task(inserter("1"))
-        tg.create_task(inserter("2"))
-        tg.create_task(notification_listener("1"))
-        tg.create_task(notification_listener("all"))
-        tg.create_task(stream_listener("2"))
+        tg.create_task(inserter("/root/1"))  # Insert into dataset 1.
+        tg.create_task(inserter("/root/2"))  # Insert into dataset 2.
+        tg.create_task(notification_listener("/root/1"))  # Get notifications for dataset 1.
+        tg.create_task(notification_listener("/root"))  # Get notifications for the parent of dataset 1.
+        tg.create_task(stream_listener("/root/1"))  # Get dataset 1 data stream.
+        tg.create_task(stream_listener("/root/2"))  # Get dataset 2 data stream.
 
 
 if __name__ == "__main__":
