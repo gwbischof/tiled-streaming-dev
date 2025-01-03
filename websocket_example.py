@@ -1,16 +1,15 @@
-import uvicorn
 import asyncio
+import asyncpg
 import json
 import pytest
-import asyncpg
+import uvicorn
 
-from fastapi import FastAPI, Body
-from fastapi import WebSocket
-from pydantic import BaseModel
-from typing import Annotated
+from fastapi import FastAPI, Body, WebSocket
 from httpx import AsyncClient
 from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
+from pydantic import BaseModel
+from typing import Annotated
 
 
 app = FastAPI()
@@ -79,7 +78,6 @@ async def notify(uid: str, websocket: WebSocket):
     """
 
     await websocket.accept()
-    print("NOTIFY", uid)
     uid = 1
     # Take a connection from the pool.
     async with app.pool.acquire() as connection:
@@ -164,11 +162,6 @@ async def websocket_endpoint(uid: str, websocket: WebSocket, cursor: int = 0):
             cursor += 1
         else:
             await asyncio.sleep(1)
-
-
-@app.get("/")
-async def root():
-    return {"message": "Testing"}
 
 
 @pytest.mark.asyncio
