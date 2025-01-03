@@ -79,7 +79,6 @@ async def notify(uid: str, websocket: WebSocket):
     """
 
     await websocket.accept()
-    breakpoint()
     print("NOTIFY", uid)
     uid = 1
     # Take a connection from the pool.
@@ -96,7 +95,6 @@ async def notify(uid: str, websocket: WebSocket):
 
 class Record(BaseModel):
     data: int
-
 
 
 @app.put("/append/{uid}")
@@ -157,7 +155,9 @@ async def websocket_endpoint(uid: str, websocket: WebSocket, cursor: int = 0):
     await websocket.accept()
     while True:
         async with app.pool.acquire() as connection:
-            uid, data, length = await connection.fetchrow(f"SELECT * FROM datasets WHERE uid={uid} LIMIT 1;")
+            uid, data, length = await connection.fetchrow(
+                f"SELECT * FROM datasets WHERE uid={uid} LIMIT 1;"
+            )
             print(f"server {uid = }, {data = }")
         if cursor < length:
             await websocket.send_json({"record": data[cursor]})
@@ -176,6 +176,11 @@ async def test_async():
     """
     Asynchronous test function to test all of the components of streaming data together.
 
+    FastAPI endpoints:
+    /notify/{uid} - Websocket endpoint to receive notifications about new data.
+    /notify/all - Websocket endpoint to receive notifications about new data for all datasets.
+    /stream/{uid} - Websocket endpoint to stream dataset records to the client.
+
     This test initializes a database connection and creates multiple asynchronous tasks to:
     1. Insert data into the server.
     2. Listen for notifications from the server.
@@ -189,7 +194,8 @@ async def test_async():
         await asyncio.sleep(2.0)
         for i in range(4):
             await ac.put(
-                f"http://localhost/append/{uid}", content=json.dumps({"record": {"data": i}})
+                f"http://localhost/append/{uid}",
+                content=json.dumps({"record": {"data": i}}),
             )
             print(f"client appended {uid = }, record {i}")
             await asyncio.sleep(1)
@@ -214,11 +220,11 @@ async def test_async():
         transport=ASGIWebSocketTransport(app=app), base_url="http://localhost"
     )
     async with asyncio.TaskGroup() as tg:
-        #tg.create_task(inserter(1))
-        #tg.create_task(inserter(2))
-        #tg.create_task(notification_listener("smi"))
-        tg.create_task(notification_listener("smi/1"))
-        #tg.create_task(stream_listener(2))
+        tg.create_task(inserter(1))
+        tg.create_task(inserter(2))
+        tg.create_task(notification_listener(1))
+        tg.create_task(notification_listener("all"))
+        tg.create_task(stream_listener(2))
 
 
 if __name__ == "__main__":
