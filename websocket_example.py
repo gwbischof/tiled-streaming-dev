@@ -1,5 +1,6 @@
 import asyncio
 import asyncpg
+import hashlib
 import json
 import pytest
 import uvicorn
@@ -37,6 +38,7 @@ async def db_init():
             await connection.execute(
                 """
                 CREATE TABLE datasets (
+                    path text,
                     uid integer,
                     data integer[],
                     length integer
@@ -46,18 +48,28 @@ async def db_init():
 
             await connection.execute(
                 f"""
-                INSERT INTO datasets (uid, data, length)
-                    VALUES (1, '{{1, 2, 3}}', 3);
+                INSERT INTO datasets (path, uid, data, length)
+                    VALUES ('root', 1, '{{1, 2, 3}}', 3);
             """
             )
             await connection.execute(
                 f"""
-                INSERT INTO datasets (uid, data, length)
-                    VALUES (2, '{{100, 101, 102}}', 3);
+                INSERT INTO datasets (path, uid, data, length)
+                    VALUES ('root', 2, '{{100, 101, 102}}', 3);
             """
             )
 
     print("done")
+
+
+def path_hash(path: str) -> str:
+    """
+    Generate a hash from a path.
+    """
+    # ensure hash is a valid postgres identifier by prefixing with a string
+    # valid identifiers start with a letter or "_" and contain only letters, numbers, and "_"
+    # and are at most 63 characters long
+    return "sha3224" + hashlib.sha3_224(path.encode()).hexdigest()
 
 
 @app.websocket("/notify/{path:path}")
@@ -85,6 +97,7 @@ async def notify(path: str, websocket: WebSocket):
         async def callback(conn, pid, channel, payload):
             await websocket.send_json({})
 
+        print(f"NOTIFY notifications_{path.replace('/', "_")}")
         await connection.add_listener(
             f"notifications_{path.replace('/', "_")}", callback
         )
@@ -97,8 +110,8 @@ class Record(BaseModel):
     data: int
 
 
-@app.put("/append/{path:path}")
-async def append(path: str, record: Annotated[Record, Body(embed=True)]):
+@app.put("/append/{path:path}/{uid}")
+async def append(path: str, uid: int, record: Annotated[Record, Body(embed=True)]):
     """
     Add a new item to the dataset and notify listeners.
 
@@ -117,25 +130,24 @@ async def append(path: str, record: Annotated[Record, Body(embed=True)]):
     async with app.pool.acquire() as connection:
         async with connection.transaction():
             # Append new value to data and increment the length.
-            uid = path.split("/")[-1]
             await connection.execute(
                 f"""
-                    UPDATE datasets SET data = array_append(data, {record.data}) WHERE uid={uid};
-                    UPDATE datasets SET length = length + 1 WHERE uid={uid};
+                    UPDATE datasets SET data = array_append(data, {record.data}) WHERE uid={uid} AND path='{path}';
+                    UPDATE datasets SET length = length + 1 WHERE uid={uid} AND path='{path}';
                 """
             )
 
             # Create a notification on the dataset and parent channels.
             temp_path = ""
-            for sub_path in path.split("/"):
+            for sub_path in path.split("/") + [str(uid)]:
                 temp_path += "_" + sub_path
                 await connection.execute(
-                    f"NOTIFY notifications{temp_path}, 'added data: {record.data}';"
+                    f"NOTIFY notifications{temp_path} 'added data: {record.data}';"
                 )
 
 
-@app.websocket("/stream/{path:path}")
-async def websocket_endpoint(path: str, websocket: WebSocket, cursor: int = 0):
+@app.websocket("/stream/{path:path}/{uid}")
+async def websocket_endpoint(path: str, uid: str,  websocket: WebSocket, cursor: int = 0):
     """
     WebSocket endpoint to stream dataset records to the client.
     Parameters
@@ -153,11 +165,10 @@ async def websocket_endpoint(path: str, websocket: WebSocket, cursor: int = 0):
 
     # How do you know when a dataset is completed?
     await websocket.accept()
-    uid = path.split("/")[-1]
     while True:
         async with app.pool.acquire() as connection:
             uid, data, length = await connection.fetchrow(
-                f"SELECT * FROM datasets WHERE uid={uid} LIMIT 1;"
+                f"SELECT * FROM datasets WHERE uid='{uid}' AND path='{path}' LIMIT 1;"
             )
             print(f"server {path = }, {data = }")
         if cursor < length:
@@ -216,12 +227,12 @@ async def test_async():
         transport=ASGIWebSocketTransport(app=app), base_url="http://localhost"
     )
     async with asyncio.TaskGroup() as tg:
-        tg.create_task(inserter("/root/1"))  # Insert into dataset 1.
-        tg.create_task(inserter("/root/2"))  # Insert into dataset 2.
-        tg.create_task(notification_listener("/root/1"))  # Get notifications for dataset 1.
-        tg.create_task(notification_listener("/root"))  # Get notifications for the parent of dataset 1.
-        tg.create_task(stream_listener("/root/1"))  # Get dataset 1 data stream.
-        tg.create_task(stream_listener("/root/2"))  # Get dataset 2 data stream.
+        tg.create_task(inserter("root/1"))  # Insert into dataset 1.
+        # tg.create_task(inserter("root/2"))  # Insert into dataset 2.
+        # tg.create_task(notification_listener("root/1"))  # Get notifications for dataset 1.
+        # tg.create_task(notification_listener("/root"))  # Get notifications for the parent of dataset 1.
+        # tg.create_task(stream_listener("/root/1"))  # Get dataset 1 data stream.
+        # tg.create_task(stream_listener("/root/2"))  # Get dataset 2 data stream.
 
 
 if __name__ == "__main__":
