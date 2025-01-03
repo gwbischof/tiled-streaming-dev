@@ -69,7 +69,7 @@ def path_hash(path: str) -> str:
     # ensure hash is a valid postgres identifier by prefixing with a string
     # valid identifiers start with a letter or "_" and contain only letters, numbers, and "_"
     # and are at most 63 characters long
-    return "sha3224" + hashlib.sha3_224(path.encode()).hexdigest()
+    return "md5" + hashlib.md5(path.encode()).hexdigest()
 
 
 @app.websocket("/notify/{path:path}")
@@ -97,9 +97,8 @@ async def notify(path: str, websocket: WebSocket):
         async def callback(conn, pid, channel, payload):
             await websocket.send_json({})
 
-        print(f"NOTIFY notifications_{path.replace('/', "_")}")
         await connection.add_listener(
-            f"notifications_{path.replace('/', "_")}", callback
+            f"n_{path_hash(path)}", callback
         )
 
         while True:
@@ -137,12 +136,12 @@ async def append(path: str, uid: int, record: Annotated[Record, Body(embed=True)
                 """
             )
 
-            # Create a notification on the dataset and parent channels.
-            temp_path = ""
-            for sub_path in path.split("/") + [str(uid)]:
-                temp_path += "_" + sub_path
+            # Create a notification on the dataset and parent channels.            
+            split_path = path.split('/') + [str(uid)]
+            for i in range(1, len(split_path) +1):
+                sub_path = '/'.join(split_path[0:i])
                 await connection.execute(
-                    f"NOTIFY notifications{temp_path} 'added data: {record.data}';"
+                    f"NOTIFY n_{path_hash(sub_path)}, 'added data: {record.data}';"
                 )
 
 
@@ -167,8 +166,8 @@ async def websocket_endpoint(path: str, uid: str,  websocket: WebSocket, cursor:
     await websocket.accept()
     while True:
         async with app.pool.acquire() as connection:
-            uid, data, length = await connection.fetchrow(
-                f"SELECT * FROM datasets WHERE uid='{uid}' AND path='{path}' LIMIT 1;"
+            path, uid, data, length = await connection.fetchrow(
+                f"SELECT * FROM datasets WHERE uid={uid} AND path='{path}' LIMIT 1;"
             )
             print(f"server {path = }, {data = }")
         if cursor < length:
@@ -228,11 +227,11 @@ async def test_async():
     )
     async with asyncio.TaskGroup() as tg:
         tg.create_task(inserter("root/1"))  # Insert into dataset 1.
-        # tg.create_task(inserter("root/2"))  # Insert into dataset 2.
-        # tg.create_task(notification_listener("root/1"))  # Get notifications for dataset 1.
-        # tg.create_task(notification_listener("/root"))  # Get notifications for the parent of dataset 1.
-        # tg.create_task(stream_listener("/root/1"))  # Get dataset 1 data stream.
-        # tg.create_task(stream_listener("/root/2"))  # Get dataset 2 data stream.
+        tg.create_task(inserter("root/2"))  # Insert into dataset 2.
+        tg.create_task(notification_listener("root/1"))  # Get notifications for dataset 1.
+        tg.create_task(notification_listener("root"))  # Get notifications for the parent of dataset 1.
+        tg.create_task(stream_listener("root/1"))  # Get dataset 1 data stream.
+        tg.create_task(stream_listener("root/2"))  # Get dataset 2 data stream.
 
 
 if __name__ == "__main__":
