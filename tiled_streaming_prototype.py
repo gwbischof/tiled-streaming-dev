@@ -128,7 +128,7 @@ async def append(path: str, uid: str, record: Annotated[Record, Body(embed=True)
 
 @app.websocket("/stream/{path:path}/{uid}")
 async def websocket_endpoint(
-    path: str, uid: str, websocket: WebSocket, cursor: int = 0
+    path: str, uid: str, websocket: WebSocket, cursor: int | None = None
 ):
     """
     WebSocket endpoint to stream dataset records to the client.
@@ -153,6 +153,8 @@ async def websocket_endpoint(
             )
             if result is not None:
                 path, uid, data, length = result
+                if cursor is None:
+                    cursor = length
                 print(f"server {path = }, {data = }")
                 while cursor < length:
                     await websocket.send_json({"record": data[cursor]})
