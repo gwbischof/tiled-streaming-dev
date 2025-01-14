@@ -75,7 +75,6 @@ async def notify(path: str, websocket: WebSocket):
 
     await websocket.accept()
     subprotocols = websocket.headers.get("sec-websocket-protocol").split(", ")
-    print("NOTIFY SP", subprotocols, type(subprotocols))
 
     # Take a connection from the pool.
     async with app.pool.acquire() as connection:
@@ -156,7 +155,7 @@ async def websocket_endpoint(
     # How do you know when a dataset is completed?
     await websocket.accept()
     subprotocols = websocket.headers.get("sec-websocket-protocol")
-    print("STREAM SP", subprotocols, type(subprotocols))
+
     while True:
         async with app.pool.acquire() as connection:
             result = await connection.fetchrow(
@@ -175,8 +174,7 @@ async def websocket_endpoint(
                     else:
                         raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
                     cursor += 1
-            else:
-                await asyncio.sleep(1)
+            await asyncio.sleep(1)
 
 
 @pytest.mark.asyncio
