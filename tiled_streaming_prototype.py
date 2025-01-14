@@ -2,10 +2,12 @@ import asyncio
 import asyncpg
 import hashlib
 import json
+import numpy as np
 import pytest
 import uvicorn
 
 from fastapi import FastAPI, Body, WebSocket
+from fastapi.exceptions import WebSocketException
 from httpx import AsyncClient
 from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
@@ -72,12 +74,19 @@ async def notify(path: str, websocket: WebSocket):
     """
 
     await websocket.accept()
+    subprotocols = websocket.headers.get("sec-websocket-protocol").split(", ")
+    print("NOTIFY SP", subprotocols, type(subprotocols))
 
     # Take a connection from the pool.
     async with app.pool.acquire() as connection:
 
         async def callback(conn, pid, channel, payload):
-            await websocket.send_json({})
+            if "application/json" in subprotocols:
+                await websocket.send_json({})
+            elif "text/plain" in subprotocols:
+                await websocket.send_text("notify: new data available")
+            else:
+                raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
 
         await connection.add_listener(f"{path_hash(path)}", callback)
 
@@ -146,6 +155,8 @@ async def websocket_endpoint(
     """
     # How do you know when a dataset is completed?
     await websocket.accept()
+    subprotocols = websocket.headers.get("sec-websocket-protocol")
+    print("STREAM SP", subprotocols, type(subprotocols))
     while True:
         async with app.pool.acquire() as connection:
             result = await connection.fetchrow(
@@ -157,9 +168,15 @@ async def websocket_endpoint(
                     cursor = length
                 print(f"server {path = }, {data = }")
                 while cursor < length:
-                    await websocket.send_json({"record": data[cursor]})
+                    if "application/json" in subprotocols:
+                        await websocket.send_json({"record": data[cursor]})
+                    elif "application/octet-stream" in subprotocols:
+                        await websocket.send_bytes(np.array(data[cursor]).tobytes())
+                    else:
+                        raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
                     cursor += 1
-            await asyncio.sleep(1)
+            else:
+                await asyncio.sleep(1)
 
 
 @pytest.mark.asyncio
@@ -183,18 +200,21 @@ async def test_async():
 
     async def notification_listener(path):
         nonlocal ac
-        async with aconnect_ws(f"http://localhost/notify/{path}", ac) as ws:
+        subprotocols = ['text/plain']
+        async with aconnect_ws(f"http://localhost/notify/{path}", ac, subprotocols=subprotocols) as ws:
             for i in range(3):
-                message = await ws.receive_json()
+                message = await ws.receive_text()
                 print(f"client received notification {path = }, {message = }")
                 await asyncio.sleep(1)
 
     async def stream_listener(path):
         nonlocal ac
-        async with aconnect_ws(f"http://localhost/stream/{path}?cursor=1", ac) as ws:
+        subprotocols = ["application/octet-stream"]
+        async with aconnect_ws(f"http://localhost/stream/{path}?cursor=1", ac, subprotocols=subprotocols) as ws:
             for i in range(3):
-                message = await ws.receive_json()
-                print(f"client received data {path = }, {message=}")
+                message = await ws.receive_bytes()
+                data = np.frombuffer(message, dtype=np.int64)
+                print(f"client received data {path = }, {data=}")
                 await asyncio.sleep(1)
 
     ac = AsyncClient(
