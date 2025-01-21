@@ -7,3 +7,4 @@ httpx-ws
 websockets
 asyncpg
 pytest-asyncio
+tifffile

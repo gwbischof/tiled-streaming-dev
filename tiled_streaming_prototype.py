@@ -152,6 +152,7 @@ async def websocket_endpoint(
     cursor : int, optional
         Starting position in the dataset (default is 0).
     """
+
     # How do you know when a dataset is completed?
     await websocket.accept()
     subprotocols = websocket.headers.get("sec-websocket-protocol")
@@ -171,6 +172,9 @@ async def websocket_endpoint(
                         await websocket.send_json({"record": data[cursor]})
                     elif "application/octet-stream" in subprotocols:
                         await websocket.send_bytes(np.array(data[cursor]).tobytes())
+                    elif "image/tiff" in subprotocols:
+                        with open(f"image.tiff", "rb") as tiff:
+                            await websocket.send_bytes(tiff.read())       
                     else:
                         raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
                     cursor += 1
