@@ -72,7 +72,6 @@ async def notify(path: str, websocket: WebSocket):
     websocket : WebSocket
         The websocket connection.
     """
-
     supported_subprotocols = ["v1"]
     supported_types = ["*/*", "application/json"]
 
@@ -219,7 +218,7 @@ async def test_async():
 
     async def notification_listener(path):
         nonlocal ac
-        subprotocols = ["text/plain"]
+        subprotocols = ["v1"]
         async with aconnect_ws(
             f"http://localhost/notify/{path}", ac, subprotocols=subprotocols
         ) as ws:
