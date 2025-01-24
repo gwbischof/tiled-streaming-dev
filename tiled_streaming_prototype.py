@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import uvicorn
 
-from fastapi import FastAPI, Body, WebSocket
+from fastapi import FastAPI, Body, WebSocket, status
 from fastapi.exceptions import WebSocketException
 from httpx import AsyncClient
 from httpx_ws import aconnect_ws
@@ -73,19 +73,36 @@ async def notify(path: str, websocket: WebSocket):
         The websocket connection.
     """
 
-    await websocket.accept()
+    supported_subprotocols = ["v1"]
+    supported_types = ["*/*", "application/json"]
+
     subprotocols = websocket.headers.get("sec-websocket-protocol").split(", ")
+    content_type = websocket.headers.get("content-type", "*/*")
+
+    if content_type not in supported_types:
+        await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
+        return
+
+    if intersect := [
+        subprotocol
+        for subprotocol in subprotocols
+        if subprotocol in supported_subprotocols
+    ]:
+        subprotocol = intersect[0]
+    else:
+        await websocket.close(code=status.WS_1002_PROTOCOL_ERROR)
+        return
+
+    await websocket.accept(subprotocol=subprotocol)
 
     # Take a connection from the pool.
     async with app.pool.acquire() as connection:
 
         async def callback(conn, pid, channel, payload):
-            if "application/json" in subprotocols:
+            if subprotocol == "v1":
                 await websocket.send_json({})
-            elif "text/plain" in subprotocols:
-                await websocket.send_text("notify: new data available")
-            else:
-                raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
+            elif subprotocol == "v2":
+                await websocket.send_json({"version": "v2"})
 
         await connection.add_listener(f"{path_hash(path)}", callback)
 
@@ -174,7 +191,7 @@ async def websocket_endpoint(
                         await websocket.send_bytes(np.array(data[cursor]).tobytes())
                     elif "image/tiff" in subprotocols:
                         with open(f"image.tiff", "rb") as tiff:
-                            await websocket.send_bytes(tiff.read())       
+                            await websocket.send_bytes(tiff.read())
                     else:
                         raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
                     cursor += 1
@@ -202,8 +219,10 @@ async def test_async():
 
     async def notification_listener(path):
         nonlocal ac
-        subprotocols = ['text/plain']
-        async with aconnect_ws(f"http://localhost/notify/{path}", ac, subprotocols=subprotocols) as ws:
+        subprotocols = ["text/plain"]
+        async with aconnect_ws(
+            f"http://localhost/notify/{path}", ac, subprotocols=subprotocols
+        ) as ws:
             for i in range(3):
                 message = await ws.receive_text()
                 print(f"client received notification {path = }, {message = }")
@@ -212,7 +231,9 @@ async def test_async():
     async def stream_listener(path):
         nonlocal ac
         subprotocols = ["application/octet-stream"]
-        async with aconnect_ws(f"http://localhost/stream/{path}?cursor=1", ac, subprotocols=subprotocols) as ws:
+        async with aconnect_ws(
+            f"http://localhost/stream/{path}?cursor=1", ac, subprotocols=subprotocols
+        ) as ws:
             for i in range(3):
                 message = await ws.receive_bytes()
                 data = np.frombuffer(message, dtype=np.int64)
