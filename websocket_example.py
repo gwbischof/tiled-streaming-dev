@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import uvicorn
 
-from fastapi import FastAPI, Body, WebSocket, status
+from fastapi import FastAPI, Body, WebSocket
 from fastapi.exceptions import WebSocketException
 from httpx import AsyncClient
 from httpx_ws import aconnect_ws
@@ -41,13 +41,27 @@ async def db_init():
                 """
                 CREATE TABLE datasets (
                     path text,
-                    uid text,
+                    uid integer,
                     data integer[],
-                    length integer,
-                    UNIQUE (path, uid)
+                    length integer
                 );
-                """
+            """
             )
+
+            await connection.execute(
+                f"""
+                INSERT INTO datasets (path, uid, data, length)
+                    VALUES ('root', 1, '{{1, 2, 3}}', 3);
+            """
+            )
+            await connection.execute(
+                f"""
+                INSERT INTO datasets (path, uid, data, length)
+                    VALUES ('root', 2, '{{100, 101, 102}}', 3);
+            """
+            )
+
+    print("done")
 
 
 def path_hash(path: str) -> str:
@@ -57,31 +71,7 @@ def path_hash(path: str) -> str:
     # ensure hash is a valid postgres identifier by prefixing with a string
     # valid identifiers start with a letter or "_" and contain only letters, numbers, and "_"
     # and are at most 63 characters long
-    return "shake256_" + hashlib.shake_256(path.encode()).hexdigest(20)
-
-
-async def websocket_accept(websocket, mimetypes, subprotocols):
-
-    # TODO: Should we use subprotocol or Accept-Encoding?
-    requested_subprotocols = websocket.headers.get("sec-websocket-protocol").split(", ")
-    requested_mimetypes = websocket.headers.get("accept", "*/*").split(", ")
-    print("HEADER", websocket.headers)
-    if intersect := [item for item in requested_mimetypes if item in mimetypes]:
-        mimetype = intersect[0]
-    else:
-        await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
-        return
-
-    if intersect := [ item for item in requested_subprotocols if item in subprotocols]:
-        subprotocol = intersect[0]
-    else:
-        await websocket.close(code=status.WS_1002_PROTOCOL_ERROR)
-        return
-
-    # TODO: Should we use subprotocol or Content-Encoding?
-    await websocket.accept(subprotocol=subprotocol, headers=[('content-type', mimetype)])
-    return mimetype, subprotocol
-    
+    return "shake256" + hashlib.shake_256(path.encode()).hexdigest(20)
 
 
 @app.websocket("/notify/{path:path}")
@@ -92,25 +82,33 @@ async def notify(path: str, websocket: WebSocket):
     Parameters
     ----------
     path : str
-        The catalog path.
+        The uid of the dataset to receive notifications about.
     websocket : WebSocket
         The websocket connection.
-    """
-    subprotocols = ["v1"]
-    mimetypes = ["*/*", "application/json"]
 
-    mimetype, subprotocol = await websocket_accept(websocket, mimetypes, subprotocols)
+    Returns
+    -------
+    None
+    """
+
+    await websocket.accept()
+    subprotocols = websocket.headers.get("sec-websocket-protocol").split(", ")
+    print("NOTIFY SP", subprotocols, type(subprotocols))
 
     # Take a connection from the pool.
     async with app.pool.acquire() as connection:
 
         async def callback(conn, pid, channel, payload):
-            if subprotocol == "v1":
+            if "application/json" in subprotocols:
                 await websocket.send_json({})
-            elif subprotocol == "v2":
-                await websocket.send_json({"version": "v2"})
+            elif "text/plain" in subprotocols:
+                await websocket.send_text("notify: new data available")
+            else:
+                raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
 
-        await connection.add_listener(f"{path_hash(path)}", callback)
+        await connection.add_listener(
+            f"n_{path_hash(path)}", callback
+        )
 
         while True:
             await asyncio.sleep(1)
@@ -121,66 +119,82 @@ class Record(BaseModel):
 
 
 @app.put("/append/{path:path}/{uid}")
-async def append(path: str, uid: str, record: Annotated[Record, Body(embed=True)]):
+async def append(path: str, uid: int, record: Annotated[Record, Body(embed=True)]):
     """
     Add a new item to the dataset and notify listeners.
 
     Parameters
     ----------
-    uid: str
-        The unique indentifier for the dataset.
     path : str
-        The catalog path.
+        The unique identifier of the dataset to which the new item will be appended.
     record : Annotated[Record, Body(embed=True)]
         The record containing the data to be appended to the dataset.
+
+    Returns
+    -------
+    None
     """
 
     async with app.pool.acquire() as connection:
         async with connection.transaction():
-            # Append new value to data or create new record and increment the length.
+            # Append new value to data and increment the length.
             await connection.execute(
                 f"""
-                    INSERT INTO datasets (path, uid, data, length)
-                    VALUES ('{path}', '{uid}', '{{{record.data}}}', 1)
-                    ON CONFLICT (path, uid) DO UPDATE
-                    SET data = array_append(datasets.data, {record.data}),
-                        length = datasets.length + 1;
+                    UPDATE datasets SET data = array_append(data, {record.data}) WHERE uid={uid} AND path='{path}';
+                    UPDATE datasets SET length = length + 1 WHERE uid={uid} AND path='{path}';
                 """
             )
 
-            # Create a notification on the dataset and parent channels.
-            split_path = path.split("/") + [str(uid)]
-            for i in range(1, len(split_path) + 1):
-                sub_path = "/".join(split_path[0:i])
+            # Create a notification on the dataset and parent channels.            
+            split_path = path.split('/') + [str(uid)]
+            for i in range(1, len(split_path) +1):
+                sub_path = '/'.join(split_path[0:i])
                 await connection.execute(
-                    f"NOTIFY {path_hash(sub_path)}, 'added data: {record.data}';"
+                    f"NOTIFY n_{path_hash(sub_path)}, 'added data: {record.data}';"
                 )
 
 
 @app.websocket("/stream/{path:path}/{uid}")
-async def websocket_endpoint(
-    path: str, uid: str, websocket: WebSocket, cursor: int | None = None
-):
+async def websocket_endpoint(path: str, uid: str,  websocket: WebSocket, cursor: int = 0):
     """
     WebSocket endpoint to stream dataset records to the client.
-
     Parameters
     ----------
-    uid : str
-        unique indentifier for the dataset.
     path : str
-        catalog path.
+        Unique identifier for the dataset.
     websocket : WebSocket
         WebSocket connection instance.
     cursor : int, optional
         Starting position in the dataset (default is 0).
+    Returns
+    -------
+    None
     """
 
     # How do you know when a dataset is completed?
-    subprotocols = ["v1"]
-    mimetypes = ["*/*", "application/json"]
-    mimetype, subprotocol = await websocket_accept(websocket, mimetypes, subprotocols)
+    await websocket.accept()
+    subprotocols = websocket.headers.get("sec-websocket-protocol")
+    print("STREAM SP", subprotocols, type(subprotocols))
+    while True:
+        async with app.pool.acquire() as connection:
+            path, uid, data, length = await connection.fetchrow(
+                f"SELECT * FROM datasets WHERE uid={uid} AND path='{path}' LIMIT 1;"
+            )
+            print(f"server {path = }, {data = }")
+        if cursor < length:
+            if "application/json" in subprotocols:
+                await websocket.send_json({"record": data[cursor]})
+            elif "application/octet-stream" in subprotocols:
+                await websocket.send_bytes(np.array(data[cursor]).tobytes())
+            else:
+                raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
+            
+            cursor += 1
+        else:
+            await asyncio.sleep(1)
 
+
+    await websocket.accept()
     while True:
         async with app.pool.acquire() as connection:
             result = await connection.fetchrow(
@@ -188,27 +202,26 @@ async def websocket_endpoint(
             )
             if result is not None:
                 path, uid, data, length = result
-                if cursor is None:
-                    cursor = length
                 print(f"server {path = }, {data = }")
                 while cursor < length:
-                    if mimetype == "application/json":
-                        await websocket.send_json({"record": data[cursor]})
-                    elif mimetype == "application/octet-stream":
-                        await websocket.send_bytes(np.array(data[cursor]).tobytes())
-                    elif mimetype == "image/tiff":
-                        with open(f"image.tiff", "rb") as tiff:
-                            await websocket.send_bytes(tiff.read())
-                    else:
-                        raise WebSocketException(f"Invalid subprotocol: {subprotocols}")
+                    await websocket.send_json({"record": data[cursor]})
                     cursor += 1
             await asyncio.sleep(1)
-
 
 @pytest.mark.asyncio
 async def test_async():
     """
     Asynchronous test function to test all of the components of streaming data together.
+
+    FastAPI endpoints:
+    /notify/{uid} - Websocket endpoint to receive notifications about new data.
+    /notify/all - Websocket endpoint to receive notifications about new data for all datasets.
+    /stream/{uid} - Websocket endpoint to stream dataset records to the client.
+
+    This test initializes a database connection and creates multiple asynchronous tasks to:
+    1. Insert data into the server.
+    2. Listen for notifications from the server.
+    3. Listen for data streams from the server.
     """
 
     await db_init()
@@ -226,12 +239,8 @@ async def test_async():
 
     async def notification_listener(path):
         nonlocal ac
-        subprotocols = ["v1"]
-        async with aconnect_ws(
-            f"http://localhost/notify/{path}", ac, subprotocols=subprotocols,
-            headers={'accept': 'application/json'}
-        ) as ws:
-            print("CLIENT HEADERS", ws.response.headers)
+        subprotocols = ['text/plain']
+        async with aconnect_ws(f"http://localhost/notify/{path}", ac, subprotocols=subprotocols) as ws:
             for i in range(3):
                 message = await ws.receive_text()
                 print(f"client received notification {path = }, {message = }")
@@ -240,11 +249,7 @@ async def test_async():
     async def stream_listener(path):
         nonlocal ac
         subprotocols = ["application/octet-stream"]
-        
-        async with aconnect_ws(
-            f"http://localhost/stream/{path}?cursor=1", ac, 
-            subprotocols=subprotocols,
-        ) as ws:
+        async with aconnect_ws(f"http://localhost/stream/{path}?cursor=1", ac, subprotocols=subprotocols) as ws:
             for i in range(3):
                 message = await ws.receive_bytes()
                 data = np.frombuffer(message, dtype=np.int64)
@@ -255,18 +260,12 @@ async def test_async():
         transport=ASGIWebSocketTransport(app=app), base_url="http://localhost"
     )
     async with asyncio.TaskGroup() as tg:
-        # Insert into dataset 1.
-        tg.create_task(inserter("root/1"))
-        # Insert into dataset 2.
-        tg.create_task(inserter("root/2"))
-        # Get notifications for dataset 1.
-        tg.create_task(notification_listener("root/1"))
-        # Get notifications for the parent of dataset 1.
-        tg.create_task(notification_listener("root"))
-        # Get dataset 1 data stream.
-        tg.create_task(stream_listener("root/1"))
-        # Get dataset 2 data stream.
-        tg.create_task(stream_listener("root/2"))
+        tg.create_task(inserter("root/1"))  # Insert into dataset 1.
+        tg.create_task(inserter("root/2"))  # Insert into dataset 2.
+        tg.create_task(notification_listener("root/1"))  # Get notifications for dataset 1.
+        tg.create_task(notification_listener("root"))  # Get notifications for the parent of dataset 1.
+        tg.create_task(stream_listener("root/1"))  # Get dataset 1 data stream.
+        tg.create_task(stream_listener("root/2"))  # Get dataset 2 data stream.
 
 
 if __name__ == "__main__":
