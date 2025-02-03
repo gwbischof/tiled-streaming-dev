@@ -62,7 +62,6 @@ def path_hash(path: str) -> str:
 
 async def websocket_accept(websocket, mimetypes, subprotocols):
 
-    # TODO: Should we use subprotocol or Accept-Encoding?
     requested_subprotocols = websocket.headers.get("sec-websocket-protocol").split(", ")
     requested_mimetypes = websocket.headers.get("accept", "*/*").split(", ")
     print("HEADER", websocket.headers)
@@ -78,7 +77,6 @@ async def websocket_accept(websocket, mimetypes, subprotocols):
         await websocket.close(code=status.WS_1002_PROTOCOL_ERROR)
         return
 
-    # TODO: Should we use subprotocol or Content-Encoding?
     await websocket.accept(subprotocol=subprotocol, headers=[('content-type', mimetype)])
     return mimetype, subprotocol
     
