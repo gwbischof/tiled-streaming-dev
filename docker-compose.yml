@@ -3,7 +3,7 @@ version: '3.9'
 
 services:
 
-  db:
+  postgres-tiled:
     image: postgres
     restart: always
     # set shared memory limit when using docker-compose
@@ -14,5 +14,7 @@ services:
         target: /storage/data
         tmpfs:
           size: 134217728 # 128*2^20 bytes = 128Mb
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_PASSWORD: secret
